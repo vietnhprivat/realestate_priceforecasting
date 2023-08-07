@@ -3,7 +3,7 @@ const cheerio = require('cheerio');
 const mysql = require('mysql2/promise');
 const { PromisePool } = require('@supercharge/promise-pool');
 
-const CONCURRENCY = 50;
+const CONCURRENCY = 5;
 
 (async () => {
   console.time("Execution time");
@@ -16,9 +16,20 @@ const CONCURRENCY = 50;
     namedPlaceholders: true
   });
 
-  const [rows] = await connection.execute('SELECT id_lokalid, bestemtFastEjendomBFENr FROM ebr WHERE ois = false LIMIT 100');
+  const [rows] = await connection.execute('SELECT id_lokalid, bestemtFastEjendomBFENr FROM ebr_sample10 WHERE ois = false and part = 10 LIMIT 200');
 
-  const browser = await puppeteer.launch();
+  const totalRows = rows.length;
+  let processedRows = 0;
+
+  let browser = await puppeteer.launch({
+    headless: false,  // Puppeteer runs in non-headless mode
+    devtools: true,   // Devtools are open by default
+    args: [
+      '--remote-debugging-port=9222',  // Starts a remote debugging instance on port 9222
+      '--no-sandbox',  // Disables the sandbox for easier debugging
+      '--disable-dev-shm-usage' // Avoids running out of memory during debugging
+    ],
+  });
 
   const { results, errors } = await PromisePool
     .for(rows)
@@ -28,7 +39,7 @@ const CONCURRENCY = 50;
       const url = `https://nyt.ois.dk/search/${row.bestemtFastEjendomBFENr}`;
 
       await page.goto(url);
-      await page.waitForTimeout(15000);
+      await page.waitForTimeout(1500);
 
       const data = await page.evaluate(() => {
         const ulElement = document.querySelector('ul.grid');
@@ -76,8 +87,14 @@ const CONCURRENCY = 50;
         }
       });
 
+      console.log('Scraped Data:', scrapedData);
+
       await connection.execute('INSERT INTO ois (id, Adresse, BFE, Matrikel_ejerlav, Grund_areal, Bebygget_areal, Byggesager, Administrator, Ejer, Vurdering, Salgspris) VALUES (:id, :Adresse, :BFE, :Matrikel_ejerlav, :Grund_areal, :Bebygget_areal, :Byggesager, :Administrator, :Ejer, :Vurdering, :Salgspris)', scrapedData);
-      await connection.execute('UPDATE ebr SET ois = true WHERE id_lokalid = ?', [row.id_lokalid]);
+      await connection.execute('UPDATE ebr_sample10 SET ois = true WHERE id_lokalid = ?', [row.id_lokalid]);
+
+      processedRows++;
+
+      console.log(`Progress: ${processedRows}/${totalRows} (${(processedRows / totalRows * 100).toFixed(2)}%)`);
 
       await page.close();
     });
